@@ -1,0 +1,92 @@
+ARG REPO_LOCATION
+ARG BASE_IMAGE=ubuntu:18.04
+
+FROM ${REPO_LOCATION}${BASE_IMAGE}
+
+ARG AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+ARG AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update && apt-get upgrade -y && \
+  apt-get install --no-install-recommends -y \
+  jq \
+  git \
+  g++ \
+  curl \
+  rsync \
+  libfontconfig \
+  build-essential \
+  awscli \
+  # (This is for Cypress)
+  # wget fonts-liberation xdg-utils libvulkan1 \
+  # (This is for Cypress)
+  # libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libgconf-2-4 libnss3 libxss1 libasound2 libxtst6 xauth xvfb \
+  # Ubuntu
+  openssl ca-certificates libpcre3 gpg-agent \
+  apt-transport-https \
+  ca-certificates \
+  iptables \
+  apt-utils && \
+  apt-get autoclean && \
+  rm -rf /var/lib/apt/lists/*
+
+
+# Install node
+RUN curl -sL https://deb.nodesource.com/setup_14.x | bash - && \
+  apt-get install -y nodejs && \
+  apt-get clean
+RUN curl -sL https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && \
+  echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list && \
+  apt-get update -y && apt-get install -y yarn && yarn install
+
+
+# Install Chrome for running Cypress tests
+# (This is for Cypress)
+# RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+# (This is for Cypress)
+# RUN apt install -y ./google-chrome-stable_current_amd64.deb
+
+# Installing docker
+RUN curl -fsSL https://get.docker.com -o get-docker.sh
+RUN VERSION=19.03.15 sh get-docker.sh
+
+RUN mkdir -p /root/.aws && \
+  echo "[default] \n\
+aws_access_key_id = ${AWS_ACCESS_KEY_ID} \n\
+aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY} \n\
+  " > /root/.aws/credentials && \
+  echo "[default] \n\
+output = json \n\
+  region = eu-west-1 \n\
+  " > /root/.aws/config
+
+WORKDIR  /home/node/
+
+# Copy and install dependency files
+COPY package.json yarn.lock cohesion.info.yml ./
+RUN yarn install --production=false --frozen-lockfile
+
+COPY cohesion-services/scss-gateway/node/package.json \
+  cohesion-services/scss-gateway/node yarn.lock \
+  ./cohesion-services/scss-gateway/node/
+RUN cd cohesion-services/scss-gateway/node && yarn install --no-cache --production=false
+
+COPY cohesion-services/dx8-gateway/node/package.json \
+  cohesion-services/dx8-gateway/node/yarn.lock \
+  ./cohesion-services/dx8-gateway/node/
+RUN cd cohesion-services/dx8-gateway/node && yarn --no-cache --production=false
+
+COPY apps/package.json apps/yarn.lock ./apps/
+
+# Copy the rest of project files
+COPY . ./
+
+RUN cd /home/node/apps && yarn --no-cache --production=false && yarn production --no-cache
+
+# (This is for Cypress)
+  # RUN cd /home/node/e2e-tests && npm install
+  # RUN cd /home/node/e2e-tests && ./node_modules/.bin/cypress install
+  # RUN cd /home/node/e2e-tests && mv ./cypress_jenkins.json ./cypress.json
+  # RUN cd /home/node/e2e-tests && mv ./cypress/support/docker-command.js ./cypress/support/vagrant-command.js
+# (This is for Cypress)

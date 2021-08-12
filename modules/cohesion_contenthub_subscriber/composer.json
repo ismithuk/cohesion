@@ -1,0 +1,9 @@
+{
+    "name": "drupal/cohesion_contenthub_subscriber",
+    "type": "drupal-module",
+    "description": "Adds Site Studio support for Acquia ContentHub Subscriber.",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "drupal/acquia_contenthub": "^2.24.0"
+    }
+}

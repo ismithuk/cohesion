@@ -1,0 +1,11 @@
+services:
+  cohesion_contenthub_subscriber.layout_canvas.unserializer:
+    class: Drupal\cohesion_contenthub_subscriber\EventSubscriber\UnserializeContentField\CohesionEntityReferenceFieldUnserializer
+    arguments: [ '@entity_type.manager' ]
+    tags:
+      - { name: event_subscriber }
+  cohesion_contenthub_subscriber.cohesion_layout_canvas.unserializer:
+    class: Drupal\cohesion_contenthub_subscriber\EventSubscriber\Cdf\CohesionLayoutUnserializationHandler
+    arguments: [ '@entity_type.manager' ]
+    tags:
+      - { name: event_subscriber }

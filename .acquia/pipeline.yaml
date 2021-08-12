@@ -1,0 +1,125 @@
+---
+type: default
+team: sitestudio
+service: cohesion-dev
+
+environment_image:
+  file: ".acquia/Dockerfile.ci"
+  context: "."
+  build_args:
+    - secrets:
+        - type: vault
+          key: AWS_ACCESS_KEY_ID
+          value: AWS_ACCESS_KEY_ID
+          path: secret/cohesion-dev/AWS_ACCESS_KEY_ID
+        - type: vault
+          key: AWS_SECRET_ACCESS_KEY
+          value: AWS_SECRET_ACCESS_KEY
+          path: secret/cohesion-dev/AWS_SECRET_ACCESS_KEY
+
+pre_build:
+  "Copy Files":
+    - steps:
+        - "cp -R /home/node ./tmp"
+  "API and SCSS Coveralls":
+    - steps:
+        - |
+          cd /home/node
+
+          export COVERALLS_FLAG_NAME=scss-gateway
+          yarn coverage:report:$COVERALLS_FLAG_NAME
+          yarn coverage:publish
+
+          export COVERALLS_FLAG_NAME=dx8-gateway
+          yarn coverage:report:$COVERALLS_FLAG_NAME
+          yarn coverage:publish
+
+          curl -k https://coveralls.io/webhook?repo_token=$COVERALLS_TOKEN -d "payload[build_num]=$BUILD_NUMBER&payload[status]=done"
+      secrets:
+        - type: vault
+          key: COVERALLS_TOKEN
+          value: COVERALLS_TOKEN
+          path: secret/cohesion-dev/COVERALLS_TOKEN
+  "API Yarn Tests":
+    - steps:
+        - "cd /home/node/cohesion-services/dx8-gateway/node && yarn run test"
+  "API Yarn Lint":
+    - steps:
+        - "cd /home/node/cohesion-services/dx8-gateway/node && yarn run lint"
+  "SCSS Yarn Tests":
+    - steps:
+        - "cd /home/node/cohesion-services/scss-gateway/node && yarn run test"
+  "SCSS Yarn Lint":
+    - steps:
+        - "cd /home/node/cohesion-services/scss-gateway/node && yarn run lint"
+  "Yarn_Jest":
+    - steps:
+        - "cd /home/node/apps/react && yarn jest"
+
+build:
+  service_image:
+    - file: "cohesion-services/scss-gateway/Dockerfile"
+      context: "cohesion-services/scss-gateway/"
+      name: cohesion-scss
+      build_args:
+        - "NODE_ENVIRONMENT=prod"
+        - "NODE_ENV=production"
+    - file: "cohesion-services/dx8-gateway/Dockerfile"
+      context: "./tmp/cohesion-services/dx8-gateway/"
+      name: cohesion-api
+      build_args:
+        - "NODE_ENVIRONMENT=prod"
+        - "NODE_ENV=production"
+        - "BUGSNAG_RELEASE_STAGE=test"
+    - file: ".acquia/scripts/Dockerfile"
+      context: ".acquia/scripts/"
+      name: drupal-client
+
+post_build:
+  dev:
+    "API PHP Composer Tests":
+      - steps:
+          - |
+            docker exec cohesion-api-${BUILD_TAG} bash -c 'cd /php && composer run-script test'
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+    "Drupal Client PHPCS":
+      - steps:
+          - |
+            docker exec cohesion-drupal-client-${BUILD_TAG} bash -c 'cd /var/www/html/drupal/docroot/modules/contrib/dx8 && ../../../../vendor/bin/phpcs --extensions=php,module,theme .'
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+    "Drupal Client PHPUnit":
+      - steps:
+          - |
+            docker exec cohesion-drupal-client-${BUILD_TAG} bash -c 'export SYMFONY_DEPRECATIONS_HELPER=disabled && cd /var/www/html/drupal/ && ./vendor/bin/phpunit -c ./docroot/core/phpunit.xml.dist --testsuite=unit --group Cohesion'
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+    "Drupal Client PHPUnit on Kernel":
+      - steps:
+          - |
+            docker exec cohesion-drupal-client-${BUILD_TAG} bash -c 'export SYMFONY_DEPRECATIONS_HELPER=disabled && cd /var/www/html/drupal/docroot/core && ../../vendor/bin/phpunit --testsuite=kernel --group=Cohesion'
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+    "Drupal Client drupal-check":
+      - steps:
+          - |
+            docker exec cohesion-drupal-client-${BUILD_TAG} bash -c 'cd /var/www/html/drupal/docroot/modules/contrib/dx8 && ../../../../vendor/bin/drupal-check *.module *.install *.php ./src ./modules'
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+
+deploy:
+  - component: custom
+    dev:
+      - steps:
+          - |
+            docker run -d --name cohesion-scss-${BUILD_TAG} ${REPO_LOCATION}cohesion-scss:${GIT_COMMIT}
+
+            NODE_API_CONTAINER_IP="$(docker inspect cohesion-scss-${BUILD_TAG} -f "{{.NetworkSettings.IPAddress}}"):3000"
+            docker run -d --name cohesion-api-${BUILD_TAG} -e SASS_SERVICE_URL=http://$NODE_API_CONTAINER_IP ${REPO_LOCATION}cohesion-api:${GIT_COMMIT}
+
+            DRUPAL_CLIENT_PORT=$(echo $((3000 + ${CHANGE_ID} + ${BUILD_NUMBER})) | cut -c1-4)
+            docker rm -f $(docker ps --filter name=cohesion-drupal-client -q) || true
+            docker run -p ${DRUPAL_CLIENT_PORT}:80 -d --name cohesion-drupal-client-${BUILD_TAG} ${REPO_LOCATION}drupal-client:${GIT_COMMIT}
+            docker exec cohesion-drupal-client-${BUILD_TAG} bash -c '/var/www/html/container-stable.sh'
+
+            /home/node/.acquia/scripts/install_cohesion_module.sh
+        args: -v /var/run/docker.sock:/var/run/docker.sock --net=host
+
+notify:
+  channel: emea-btn-pipeline
